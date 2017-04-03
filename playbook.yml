@@ -1,0 +1,174 @@
+---
+
+- hosts: web1
+  gather_facts: no
+ 
+  tasks:
+
+   - name: apache install first
+     apt: name=apache2 update_cache=yes state=latest
+   
+   
+   - name: create virtual host file
+     template: src=templates/virtualhost.conf.j2 dest=/etc/apache2/sites-available/web1.conf
+
+   - name: rm default hosts apache
+     shell: rm  /etc/apache2/sites-enabled/*
+
+   - name: enabled  new vh
+     file: src=/etc/apache2/sites-available/web1.conf dest=/etc/apache2/sites-enabled/web1.conf state=link
+
+   - name: rm default page
+     shell: rm /var/www/html/index.html
+
+   - name: create new html
+     template: src=templates/index1.html.j2 dest=/var/www/html/index.html mode=0655
+   
+   - name: restart apache2
+     service: name=apache2 state=restarted
+ 
+ 
+- hosts: web2
+  gather_facts: no
+
+  tasks:
+   - name: apache install two
+     apt: name=apache2 update_cache=yes state=latest
+
+
+   - name: create virtual host file
+     template: src=templates/virtualhost2.conf.j2 dest=/etc/apache2/sites-available/web2.conf
+
+   - name: rm default hosts apache
+     shell: rm  /etc/apache2/sites-enabled/*
+
+   - name: enabled  new vh
+     file: src=/etc/apache2/sites-available/web2.conf dest=/etc/apache2/sites-enabled/web2.conf state=link
+
+   - name: rm default page
+     shell: rm /var/www/html/index.html
+
+   - name: create new html
+     template: src=templates/index2.html.j2 dest=/var/www/html/index.html mode=0655
+
+   - name: restart apache2
+     service: name=apache2 state=restarted
+
+
+- hosts: haproxy
+  gather_facts: no
+
+  tasks:
+   - name: haproxy install
+     apt: name=haproxy state=present 
+
+   - name: Enable init script
+     lineinfile:
+       dest: /etc/default/haproxy
+       regexp: "^ENABLED.+$"
+       line: "ENABLED=1"
+       state: present
+
+
+   - name: Update HAProxy config
+     template: src=templates/haproxy.cfg.j2  dest=/etc/haproxy/haproxy.cfg  backup=yes
+
+   - name: restart haproxy
+     service: name=haproxy state=restarted
+
+- hosts: jenkins
+  gather_facts: no
+  vars:
+    jenkins_admin_password: test
+    jenkins_user_name: jenkins
+    jenkins_user_group: "{{ jenkins_user_name }}"
+    jenkins_user_home: "/var/lib/{{ jenkins_user_name }}"
+    jenkins_defaults_file: /etc/default/jenkins
+    jenkins_java_args: -Djava.awt.headless=true -Djenkins.install.runSetupWizard=false
+
+  tasks:
+  # - name: add repository java
+  #   shell: sudo  add-apt-repository ppa:webupd8team/java
+  
+#   - name: update
+#     shell: sudo apt update
+
+#   - name: install java 8
+#     shell: sudo apt-get install oracle-java8-set-default
+
+    - name: add jenkins repo
+      shell: sudo  wget -q -O - https://jenkins-ci.org/debian/jenkins-ci.org.key |  apt-key add -
+
+    - name: add jenk to source list
+      shell: sudo sh -c 'echo deb http://pkg.jenkins-ci.org/debian binary/ > /etc/apt/sources.list.d/jenkins.list'
+    
+    - name: update
+      shell: sudo apt update
+   
+    - name: install jenkins
+      apt: name=jenkins update_cache=yes state=present
+      ignore_errors: yes
+
+
+    - name: Set Jenkins JAVA_ARGS
+      lineinfile:
+          dest: "{{ jenkins_defaults_file }}"
+          insertbefore: "^JENKINS_ARGS.*"
+          line: "JAVA_ARGS=\"{{ jenkins_java_args }}\""
+      register: jenkins_defaults
+  
+    - name: Create required directories.
+      file:
+        group: "{{ jenkins_user_group }}"
+        owner: "{{ jenkins_user_name }}"
+        path: "{{ item }}"
+        state: directory
+      with_items:
+        - "{{ jenkins_user_home }}/plugins"
+
+    - name: Remove initial Jenkins password
+      file: name=/var/lib/jenkins/secrets/initialAdminPassword state=absent
+
+
+    - name: Create admin user directory
+      file: path="{{ jenkins_user_home }}/users/admin" owner=jenkins group=jenkins mode=0755 state=directory recurse=yes
+
+
+    - name: Create admin with passw test
+      template: src=templates/admin-config.xml.j2 dest="{{ jenkins_user_home }}/users/admin/config.xml" force=no owner={{ jenkins_user_name }} mode=0700
+      register: jenkins_admin_config
+    
+    - name: Create config
+      template: src=templates/jconfig.xml.j2 dest="{{ jenkins_user_home }}/config.xml" owner={{ jenkins_user_name }}
+      register: jenkins_config  
+
+    - name: Restart Jenkins
+      service: name=jenkins state=restarted
+
+    - name: pause for initial jenkins
+      pause:
+        seconds: 30
+
+    - name: rights for jobs
+      file: path="{{ jenkins_user_home }}/jobs" owner=jenkins group=jenkins mode=0755
+
+    - name: create template jenkins job
+      template: src=templates/test.yml.j2  dest="{{ jenkins_user_home }}/test.yml" owner={{ jenkins_user_name }} group=jenkins mode=0755
+  
+    - name: copy jar file cli
+      copy: src=jenkins-cli.jar dest={{ jenkins_user_home }}/jenkins-cli.jar owner=jenkins group=jenkins mode=0755
+   
+    - name: copy xml file
+      copy: src=templates/text.xml dest={{ jenkins_user_home }}/test.xml owner=jenkins group=jenkins mode=0755
+   
+    - name: login jenkins job
+      shell: cd {{ jenkins_user_home }}  && java -jar jenkins-cli.jar -s http://192.168.34.13:8080/ login --username admin --password test
+    
+    - name: create job
+      shell: cd {{ jenkins_user_home }} && java -jar jenkins-cli.jar -s http://192.168.34.13:8080/ create-job < test.xml gena
+
+      
+            
+    - name: Restart Jenkins
+      service: name=jenkins state=restarted
+
